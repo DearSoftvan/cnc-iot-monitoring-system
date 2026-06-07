@@ -1,89 +1,246 @@
 # CNC IoT Monitoring System
 
-This repository contains an IoT-based CNC monitoring system prototype.
+This repository contains a local IoT-based CNC monitoring system prototype.
 
-The project is designed to collect CNC machine telemetry data from edge devices, transfer the data through a gateway, and display the data on a local web dashboard running on a macOS central computer.
+The project is designed to collect CNC machine telemetry from ESP-12E edge nodes, transfer the data through an ESP32 gateway, and display the received data on a local web dashboard running on a macOS central computer.
 
-The current development phase uses Kaggle CNC datasets to simulate CNC machine telemetry because a real CNC machine is not available for testing.
+Because a real CNC machine is not available during development, early software validation uses Kaggle CNC dataset files and simulated CNC telemetry. The current hardware prototype also includes ESP-12E and ESP32 firmware for testing a real local IoT data path.
 
 ---
 
 ## Project Goal
 
-The main goal of this project is to build a local IoT monitoring system for CNC machines.
+The main goal of this project is to build a local CNC monitoring architecture that can:
 
-The system focuses on:
-
-- collecting CNC-related telemetry data,
-- transmitting machine data over a local network,
-- using MQTT for lightweight IoT data transfer,
-- storing received data on a central computer,
-- displaying real-time CNC data on a local web dashboard,
-- preparing the system for later ESP-12E and ESP32 hardware integration.
+- collect CNC-related telemetry from edge devices,
+- transfer machine data over a local wireless network,
+- use lightweight IoT communication protocols,
+- route edge-node data through a gateway device,
+- store received messages on a central computer,
+- show CNC status and telemetry on a local web dashboard,
+- distinguish between machine status, gateway status, and offline devices.
 
 ---
 
-## Planned Architecture
+## Current Prototype Architecture
 
-The final planned architecture is:
+The current prototype uses ESP-12E edge nodes, an ESP32 gateway, MQTT, and a macOS dashboard.
 
 ```text
 ESP-12E edge nodes
-        ↓
+        ↓ ESP-NOW
 ESP32 gateway
+        ↓ MQTT
+macOS Mosquitto broker
         ↓
-MQTT
+Python dashboard server + SQLite database
         ↓
-macOS central computer
-        ↓
-SQLite database + HTTP/WebSocket dashboard
+HTTP / WebSocket local dashboard
 ```
 
 ### Layered Communication Structure
 
 | Layer | Technology | Purpose |
 |------|------------|---------|
-| Local network connection | Wi-Fi | Connects devices on the same local network |
-| IoT data transfer | MQTT | Transfers CNC telemetry messages |
+| Local network connection | Wi-Fi / hotspot | Connects macOS and ESP32 on the same local network |
+| Edge-node to gateway communication | ESP-NOW | Sends compact CNC packets from ESP-12E nodes to ESP32 |
+| Gateway to central computer communication | MQTT | Transfers CNC telemetry and gateway status to macOS |
 | Dashboard access | HTTP | Serves the web dashboard to users |
 | Live dashboard updates | WebSocket | Updates dashboard data in real time |
-| Data format | JSON | Standard message format for machine data |
+| Data format | JSON | Standard message format after ESP32 gateway conversion |
 | Local storage | SQLite | Stores received CNC messages |
 
 ---
 
-## Current MVP
+## Architecture Diagrams
 
-The current working MVP uses local CSV files as the CNC data source.
+Project diagrams are stored under:
 
 ```text
-Kaggle CNC CSV dataset
-        ↓
-Python simulator
-        ↓
-MQTT
-        ↓
-macOS backend
-        ↓
-SQLite database
-        ↓
-Local web dashboard
+docs/diagrams/
 ```
 
-The MVP has already been tested successfully for:
+Recommended files:
 
-- CSV-based CNC data simulation,
-- MQTT publishing,
-- MQTT subscription using `mosquitto_sub`,
+- [`docs/diagrams/system_architecture.md`](docs/diagrams/system_architecture.md)
+- [`docs/diagrams/data_flow.md`](docs/diagrams/data_flow.md)
+- [`docs/diagrams/esp12e_button_state_machine.md`](docs/diagrams/esp12e_button_state_machine.md)
+- [`docs/diagrams/esp12e_button_node_wiring.md`](docs/diagrams/esp12e_button_node_wiring.md)
+- [`docs/diagrams/esp32_gateway_power_wiring.md`](docs/diagrams/esp32_gateway_power_wiring.md)
+
+---
+
+## Current Prototype Status
+
+Completed and tested:
+
+- macOS CSV-to-MQTT simulator,
+- Mosquitto MQTT broker,
+- MQTT message inspection using `mosquitto_sub`,
 - local dashboard access from macOS,
-- dashboard access from a mobile phone on the same Wi-Fi network,
-- SQLite database recording.
+- dashboard access from a mobile device on the same Wi-Fi network,
+- SQLite database recording,
+- ESP32 MQTT gateway publishing test,
+- ESP32 gateway status monitoring on the dashboard,
+- dashboard offline timeout for CNC devices,
+- shared local `secrets.h` configuration approach,
+- ESP-NOW packet structure shared between ESP32 and ESP-12E firmware,
+- ESP32 final gateway firmware that receives ESP-NOW packets and forwards them through MQTT,
+- ESP-12E auto sender firmware,
+- ESP-12E button state node firmware for multiple CNC states.
+
+Current active development:
+
+- stabilizing the ESP-12E button state node,
+- improving hardware diagrams and documentation,
+- preparing the full ESP-12E → ESP32 → MQTT → dashboard demonstration.
+
+---
+
+## Firmware Roles
+
+### ESP32 Gateway
+
+The ESP32 gateway is the central hardware bridge between ESP-12E edge nodes and the macOS MQTT system.
+
+It is responsible for:
+
+- connecting to the local Wi-Fi / hotspot network,
+- connecting to the macOS Mosquitto MQTT broker,
+- receiving ESP-NOW packets from ESP-12E edge nodes,
+- assigning automatic machine names such as `CNC-01`, `CNC-02`, etc. when an ESP-12E does not provide a label,
+- converting compact ESP-NOW packets into dashboard-compatible JSON messages,
+- publishing CNC telemetry to MQTT,
+- publishing gateway status to MQTT.
+
+The ESP32 gateway does not generate CNC telemetry in the final gateway firmware. It only forwards and converts data received from ESP-12E edge nodes.
+
+### ESP-12E Auto Sender
+
+The ESP-12E auto sender is a simple edge-node firmware.
+
+It is designed to:
+
+- start automatically when powered,
+- connect to the configured Wi-Fi / hotspot network,
+- send compact CNC-like telemetry packets to the ESP32 gateway using ESP-NOW,
+- require no button or LED to operate.
+
+This version is useful for simple demonstrations where the device should start sending data immediately after power is applied.
+
+### ESP-12E Button State Node
+
+The ESP-12E button state node adds local control and visual state indication.
+
+It uses:
+
+- one push button,
+- one WS2812 RGB LED,
+- ESP-NOW communication to the ESP32 gateway.
+
+The planned state model is:
+
+| State | Meaning | ESP-12E Behavior | LED Color |
+|------|---------|------------------|-----------|
+| `LIVE_IDLE` | Gateway communication is active, but CNC is not producing data | Sends heartbeat / stopped packets | Yellow |
+| `RUNNING` | CNC telemetry is being produced | Sends running telemetry packets | Purple |
+| `OFFLINE_STANDBY` | Device stops publishing data | Sends no packets, dashboard marks it offline after timeout | White |
+| `TRANSITION_ERROR` | A state transition or network operation failed | Error indication | Red |
+
+Alarm/error packets during `RUNNING` are indicated by a short three-blink LED pattern.
+
+---
+
+## MQTT Topic Structure
+
+The current topic structure includes both CNC telemetry and gateway status.
+
+```text
+factory/cnc/<machine_id>/telemetry
+factory/gateway/ESP32-GW-01/status
+```
+
+Examples:
+
+```text
+factory/cnc/CNC-01/telemetry
+factory/cnc/CNC-02/telemetry
+factory/gateway/ESP32-GW-01/status
+```
+
+The ESP32 gateway can automatically assign machine names when the ESP-12E node does not provide a label.
+
+Example automatic naming:
+
+```text
+First unknown ESP-12E  → CNC-01
+Second unknown ESP-12E → CNC-02
+Third unknown ESP-12E  → CNC-03
+```
+
+---
+
+## Transmitted Data Types
+
+The system is designed to transmit CNC-related telemetry data such as:
+
+| Data Group | Example Fields |
+|-----------|----------------|
+| Identity data | `machine_id`, `device_id`, `gateway_id`, `run_id`, `tool_id` |
+| Process parameters | `ap`, `vc`, `f`, `machined_length` |
+| Force/load data | `Fx`, `Fy`, `Fz`, `F` |
+| Quality data | `Ra`, `Rz`, `Rt`, `Rsk`, `Rku`, `RSm` |
+| Status data | `machine_status`, `quality_status`, `load_status`, `alarm_code` |
+| Time / sequence data | `timestamp`, `sequence_no` |
+
+During simulation, timestamp values may represent device uptime such as `ESP32_MILLIS_6192`. In a real CNC integration, the timestamp field can be filled by the CNC device, the data acquisition interface, or the central backend depending on the final architecture.
+
+---
+
+## Example MQTT Message
+
+```json
+{
+  "device_id": "EDGE-01",
+  "gateway_id": "ESP32-GW-01",
+  "machine_id": "CNC-01",
+  "edge_mac": "AA:BB:CC:DD:EE:FF",
+  "source_file": "ESP12E_ESPNOW",
+  "sequence_no": 42,
+  "timestamp": "ESP32_MILLIS_6192",
+  "run_id": "ESP12E_EDGE_PACKET",
+  "tool_id": 22,
+  "process": {
+    "depth_of_cut_ap": 0.25,
+    "cutting_speed_vc": 240.0,
+    "feed_rate_f": 0.075,
+    "machined_length": 42
+  },
+  "force": {
+    "fx": 49.0,
+    "fy": 44.0,
+    "fz": 21.0,
+    "total_force": 114.0
+  },
+  "quality": {
+    "ra": 0.48,
+    "rz": 1.75,
+    "rt": 2.05
+  },
+  "status": {
+    "machine_status": "RUNNING",
+    "load_status": "NORMAL_LOAD",
+    "quality_status": "GOOD",
+    "alarm_code": null
+  }
+}
+```
 
 ---
 
 ## Data Source
 
-The current prototype uses Kaggle CNC dataset files.
+The early software MVP uses Kaggle CNC dataset files as a simulated data source.
 
 The raw dataset files should be stored locally under:
 
@@ -109,89 +266,17 @@ data/sample/
 
 ---
 
-## Transmitted Data Types
-
-The system is designed to transmit CNC-related telemetry data such as:
-
-| Data Group | Example Fields |
-|-----------|----------------|
-| Identity data | `machine_id`, `device_id`, `run_id`, `tool_id` |
-| Process parameters | `ap`, `vc`, `f`, `machined_length` |
-| Force/load data | `Fx`, `Fy`, `Fz`, `F` |
-| Quality data | `Ra`, `Rz`, `Rt`, `Rsk`, `Rku`, `RSm` |
-| Status data | `machine_status`, `quality_status`, `load_status`, `alarm_code` |
-| Time data | `timestamp`, `sequence_no` |
-
----
-
-## Example MQTT Message
-
-```json
-{
-  "device_id": "EDGE-01",
-  "gateway_id": "ESP32-GATEWAY-01",
-  "machine_id": "CNC-01",
-  "source_file": "Exp1.csv",
-  "sequence_no": 42,
-  "timestamp": "2026-05-27T15:30:10",
-  "process": {
-    "depth_of_cut_ap": 0.25,
-    "cutting_speed_vc": 350,
-    "feed_rate_f": 0.07,
-    "machined_length": 12
-  },
-  "force": {
-    "fx": 49.23,
-    "fy": 44.46,
-    "fz": 21.07,
-    "total_force": 69.60
-  },
-  "quality": {
-    "ra": 0.391,
-    "rz": 1.855,
-    "rt": 2.082
-  },
-  "status": {
-    "machine_status": "RUNNING",
-    "load_status": "NORMAL_LOAD",
-    "quality_status": "GOOD",
-    "alarm_code": null
-  }
-}
-```
-
----
-
-## MQTT Topic Structure
-
-The initial topic structure is:
-
-```text
-factory/cnc/CNC-01/telemetry
-factory/cnc/CNC-02/telemetry
-factory/cnc/PREP-STATION/telemetry
-```
-
-Future topic extensions may include:
-
-```text
-factory/cnc/CNC-01/status
-factory/cnc/CNC-01/quality
-factory/cnc/CNC-01/alarm
-```
-
----
-
 ## Main Technologies
 
 | Technology | Purpose |
 |-----------|---------|
 | macOS | Central development and runtime environment |
-| Python | Simulator, backend, and data handling |
-| MQTT | IoT telemetry transfer |
+| Python | Simulator, backend, and dashboard server |
+| MQTT | IoT telemetry transfer between gateway and macOS |
 | Mosquitto | Local MQTT broker |
 | SQLite | Local database storage |
 | HTTP / WebSocket | Web dashboard and live updates |
+| ESP-NOW | ESP-12E to ESP32 local wireless packet transfer |
 | ESP-12E / ESP8266 | CNC edge node hardware |
 | ESP32 | Gateway hardware |
 | Arduino IDE | Firmware development |
@@ -213,11 +298,19 @@ cnc-iot-monitoring-system/
 │   ├── sample/
 │   └── raw/
 ├── firmware/
+│   ├── common/
+│   │   ├── cnc_espnow_packet.h
+│   │   └── secrets.example.h
 │   ├── esp12e_edge_node/
+│   │   ├── esp12e_auto_sender/
+│   │   └── esp12e_button_state_node/
 │   └── esp32_gateway/
+│       ├── esp32_gateway_mqtt_test/
+│       └── esp32_gateway_final/
 ├── macos_backend/
 │   ├── simulator.py
 │   ├── dashboard_server.py
+│   ├── mosquitto_local.conf
 │   ├── requirements.txt
 │   └── static/
 └── database/
@@ -229,9 +322,10 @@ cnc-iot-monitoring-system/
 |----------|---------|
 | `docs/architecture/` | Architecture notes and design decisions |
 | `docs/diagrams/` | System diagrams and wiring diagrams |
-| `docs/notes/` | Development notes |
+| `docs/notes/` | Development notes and known limitations |
 | `data/sample/` | Small sample datasets that can be committed |
 | `data/raw/` | Local raw datasets, ignored by Git |
+| `firmware/common/` | Shared packet structure and example configuration |
 | `firmware/esp12e_edge_node/` | ESP-12E edge node firmware |
 | `firmware/esp32_gateway/` | ESP32 gateway firmware |
 | `macos_backend/` | Python simulator, backend, and dashboard server |
@@ -247,11 +341,20 @@ cnc-iot-monitoring-system/
 brew install mosquitto
 ```
 
-Start the broker manually during development:
+Start the broker with the local configuration file so external devices on the same Wi-Fi / hotspot network can connect:
 
 ```bash
-mosquitto -v
+mosquitto -c macos_backend/mosquitto_local.conf -v
 ```
+
+The local development config uses:
+
+```text
+listener 1883 0.0.0.0
+allow_anonymous true
+```
+
+This is intended only for a trusted local demo network.
 
 ### 2. Create Python Virtual Environment
 
@@ -285,116 +388,79 @@ ipconfig getifaddr en0
 Example:
 
 ```text
-http://10.243.103.102:8000
+http://192.168.43.21:8000
 ```
 
-### 4. Run CNC Data Simulator
+### 4. Verify MQTT Messages
+
+To inspect all gateway and CNC messages:
 
 ```bash
-python3 macos_backend/simulator.py --data-dir data/raw --interval 1 --loop
+mosquitto_sub -h 127.0.0.1 -t "factory/#" -v
 ```
 
-### 5. Verify MQTT Messages
+To inspect only CNC telemetry:
 
 ```bash
 mosquitto_sub -h 127.0.0.1 -t "factory/cnc/+/telemetry" -v
 ```
 
-If messages are shown in the terminal, MQTT publishing and subscription are working correctly.
+To inspect only gateway status:
 
----
-
-## Git Data Policy
-
-The following files should not be committed:
-
-- raw Kaggle CSV files,
-- SQLite database files,
-- virtual environments,
-- private keys,
-- tokens,
-- password or secret files.
-
-The `.gitignore` file is configured to exclude:
-
-```text
-.DS_Store
-.venv/
-*.db
-*.sqlite
-*.csv
-data/raw/
-.env
-*.pem
-*.key
-id_rsa*
-id_ed25519*
+```bash
+mosquitto_sub -h 127.0.0.1 -t "factory/gateway/#" -v
 ```
 
-Small sample CSV files can be committed only under:
+### 5. Optional CSV Simulator
 
-```text
-data/sample/
+The Python CSV simulator is still useful for backend-only testing:
+
+```bash
+python3 macos_backend/simulator.py --data-dir data/raw --interval 1 --loop
 ```
 
 ---
 
-## Related Test Repository
+## Firmware Setup
 
-The first hardware validation test is stored separately:
+### ESP32 Gateway
+
+Recommended Arduino IDE board selection for the 30-pin ESP32 ESP-32S development board:
 
 ```text
-esp12e-cnc-node-test
+Board: ESP32 Dev Module
+Upload Speed: 115200
+Flash Mode: DIO
+Flash Size: 4MB
+Partition Scheme: Default 4MB with spiffs
+Serial Monitor: 115200 baud
 ```
 
-That repository contains:
+Required library:
 
-- ESP-12E / NodeMCU test firmware,
-- push button input test,
-- WS2812 RGB LED output test,
-- wiring table,
-- wiring diagram,
-- Arduino IDE setup instructions.
+```text
+PubSubClient by Nick O'Leary
+```
 
----
+`WiFi.h` is included with the ESP32 board package.
 
-## Current Project Status
+### ESP-12E / NodeMCU
 
-Completed:
+Recommended Arduino IDE board selection:
 
-- macOS CSV-to-MQTT simulator tested,
-- MQTT message flow verified with `mosquitto_sub`,
-- local web dashboard tested,
-- web dashboard tested from a mobile phone on the same Wi-Fi network,
-- SQLite database recording verified,
-- ESP-12E button and WS2812 LED hardware test completed in a separate repository.
+```text
+Board: NodeMCU 1.0 (ESP-12E Module)
+Upload Speed: 115200
+Serial Monitor: 115200 baud
+```
 
-Next steps:
+For the button state node, the WS2812 LED requires:
 
-1. Add ESP32 gateway MQTT publishing test.
-2. Add ESP-12E edge node firmware.
-3. Connect ESP-12E edge nodes to ESP32 gateway.
-4. Integrate real hardware data flow with the macOS dashboard.
-5. Prepare presentation-ready architecture diagrams and screenshots.
+```text
+Adafruit NeoPixel by Adafruit
+```
 
 ---
-
-## Version Plan
-
-| Version | Scope |
-|--------|-------|
-| `v0.1` | macOS CSV-to-MQTT dashboard MVP |
-| `v0.2` | ESP32 MQTT gateway test |
-| `v0.3` | ESP-12E edge node firmware |
-| `v0.4` | ESP-12E to ESP32 communication |
-| `v0.5` | Full local IoT data pipeline |
-| `v1.0` | Presentation-ready project |
-
----
-
-## License
-
-This project is released under the MIT License.
 
 ## Local Firmware Secrets
 
@@ -448,41 +514,17 @@ firmware/common/secrets.h
 
 ### Shared Use Across Firmware
 
-The same local `secrets.h` file can be shared by all firmware sketches, including:
+The same local `secrets.h` file can be shared by all firmware sketches.
+
+Sketch folders can include a local symbolic link named `secrets.h`, for example:
 
 ```text
-firmware/esp32_gateway/
-firmware/esp12e_edge_node/
+firmware/esp32_gateway/esp32_gateway_final/secrets.h
+firmware/esp12e_edge_node/esp12e_auto_sender/secrets.h
+firmware/esp12e_edge_node/esp12e_button_state_node/secrets.h
 ```
 
-For example, an ESP32 or ESP-12E sketch can access the shared local configuration through a local `secrets.h` reference.
-
-This keeps common network configuration in one place:
-
-- Wi-Fi SSID
-- Wi-Fi password
-- MQTT broker IP address
-- MQTT broker port
-
-Device-specific values should remain inside each sketch instead of `secrets.h`, for example:
-
-- `DEVICE_ID`
-- `MACHINE_ID`
-- `GATEWAY_ID`
-- MQTT topic names
-
-This prevents multiple devices from accidentally using the same identity.
-
-### Git Ignore Rules
-
-The project `.gitignore` must include rules similar to:
-
-```gitignore
-# Local firmware secrets
-**/secrets.h
-**/wifi_credentials.h
-**/local_config.h
-```
+These local links or copies must remain ignored by Git.
 
 ### Safety Check Before Commit
 
@@ -490,21 +532,12 @@ Before committing firmware changes, verify that the real secrets file is ignored
 
 ```bash
 git check-ignore -v firmware/common/secrets.h
+git check-ignore -v firmware/esp32_gateway/esp32_gateway_final/secrets.h
+git check-ignore -v firmware/esp12e_edge_node/esp12e_auto_sender/secrets.h
+git check-ignore -v firmware/esp12e_edge_node/esp12e_button_state_node/secrets.h
 ```
 
-Expected result:
-
-```text
-.gitignore:...:**/secrets.h    firmware/common/secrets.h
-```
-
-If an ESP32 sketch folder contains a local symbolic link or local copy named `secrets.h`, check it too:
-
-```bash
-git check-ignore -v firmware/esp32_gateway/esp32_gateway_mqtt_test/secrets.h
-```
-
-Also inspect what Git would add before actually staging files:
+Also inspect what Git would add before staging files:
 
 ```bash
 git add -n .
@@ -514,27 +547,116 @@ The following files must not appear in the add list:
 
 ```text
 firmware/common/secrets.h
-firmware/esp32_gateway/esp32_gateway_mqtt_test/secrets.h
+firmware/esp32_gateway/esp32_gateway_final/secrets.h
+firmware/esp12e_edge_node/esp12e_auto_sender/secrets.h
+firmware/esp12e_edge_node/esp12e_button_state_node/secrets.h
 data/raw/Exp1.csv
 data/raw/Exp2.csv
 data/raw/Prep.csv
+*.db
 ```
 
-### MacBook MQTT Broker IP
+---
 
-For the current prototype, the MQTT broker IP address is configured manually in `secrets.h`.
+## Hardware Wiring Notes
 
-To find the MacBook Wi-Fi IP address:
+### ESP-12E Button State Node
 
-```bash
-ipconfig getifaddr en0
+| Component | NodeMCU Pin | GPIO | Notes |
+|----------|-------------|------|-------|
+| Push button | D5 | GPIO14 | Connected between D5 and GND, uses `INPUT_PULLUP` |
+| WS2812 data | D2 | GPIO4 | D2 → 220Ω/330Ω resistor → WS2812 DIN |
+| WS2812 VCC | 3V | - | Single LED, low brightness |
+| WS2812 GND | GND | - | Common ground |
+
+### ESP32 Gateway Power
+
+For standalone operation:
+
+```text
+Power supply +5V → ESP32 5V / VIN pin
+Power supply GND → verified ESP32 GND pin
 ```
 
-Use the returned address as:
+Do not power the ESP32 from the `3V3` pin during this project.
 
-```cpp
-#define MQTT_BROKER_IP "YOUR_MACBOOK_IP"
-#define MQTT_BROKER_PORT 1883
+During debugging and firmware upload, using USB power only is recommended.
+
+---
+
+## Git Data Policy
+
+The following files should not be committed:
+
+- raw Kaggle CSV files,
+- SQLite database files,
+- virtual environments,
+- private keys,
+- tokens,
+- Wi-Fi passwords,
+- real local `secrets.h` files,
+- local backup files.
+
+The `.gitignore` file is configured to exclude these categories.
+
+Small sample CSV files can be committed only under:
+
+```text
+data/sample/
 ```
 
-This manual IP approach is used for the first hardware prototype because it is simple and reliable during local Wi-Fi or hotspot-based testing.
+---
+
+## Related Test Repository
+
+The first hardware validation test is stored separately:
+
+```text
+esp12e-cnc-node-test
+```
+
+That repository contains:
+
+- ESP-12E / NodeMCU test firmware,
+- push button input test,
+- WS2812 RGB LED output test,
+- wiring table,
+- wiring diagram,
+- Arduino IDE setup instructions.
+
+---
+
+## Version Plan
+
+| Version | Scope |
+|--------|-------|
+| `v0.1` | macOS CSV-to-MQTT dashboard MVP |
+| `v0.2` | ESP32 MQTT gateway test and dashboard offline timeout |
+| `v0.3` | ESP-NOW edge prototype with ESP32 gateway and ESP-12E nodes |
+| `v0.4` | Stabilized ESP-12E button state node and documentation |
+| `v0.5` | Full local IoT data pipeline demonstration |
+| `v1.0` | Presentation-ready project |
+
+---
+
+## Known Limitations
+
+Current limitations are documented in:
+
+```text
+docs/notes/current_limitations.md
+```
+
+Main current limitations:
+
+- The ESP-12E button state node still needs stabilization.
+- ESP32 automatic machine naming is stored in memory and resets after ESP32 restart.
+- CNC telemetry is simulated; real CNC integration is not yet implemented.
+- Timestamp values currently may represent device uptime instead of real CNC timestamps.
+- The local Mosquitto configuration allows anonymous access and should only be used in a trusted demo network.
+
+---
+
+## License
+
+This project is released under the MIT License.
