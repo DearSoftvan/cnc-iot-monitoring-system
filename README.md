@@ -395,3 +395,146 @@ Next steps:
 ## License
 
 This project is released under the MIT License.
+
+## Local Firmware Secrets
+
+Wi-Fi SSID, Wi-Fi password, MQTT broker IP address, MQTT port, API keys, tokens, and other local configuration values must not be committed to GitHub.
+
+Firmware sketches use a local configuration file:
+
+```text
+firmware/common/secrets.h
+```
+
+This file is ignored by Git and must remain only on the local development machine.
+
+### Creating the Local Secrets File
+
+Copy the example file:
+
+```bash
+cp firmware/common/secrets.example.h firmware/common/secrets.h
+```
+
+Then edit the local file:
+
+```bash
+nano firmware/common/secrets.h
+```
+
+Example structure:
+
+```cpp
+#pragma once
+
+#define WIFI_SSID "YOUR_WIFI_NAME"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+
+#define MQTT_BROKER_IP "YOUR_MACBOOK_IP"
+#define MQTT_BROKER_PORT 1883
+```
+
+Only the following example file should be committed:
+
+```text
+firmware/common/secrets.example.h
+```
+
+The real local file must not be committed:
+
+```text
+firmware/common/secrets.h
+```
+
+### Shared Use Across Firmware
+
+The same local `secrets.h` file can be shared by all firmware sketches, including:
+
+```text
+firmware/esp32_gateway/
+firmware/esp12e_edge_node/
+```
+
+For example, an ESP32 or ESP-12E sketch can access the shared local configuration through a local `secrets.h` reference.
+
+This keeps common network configuration in one place:
+
+- Wi-Fi SSID
+- Wi-Fi password
+- MQTT broker IP address
+- MQTT broker port
+
+Device-specific values should remain inside each sketch instead of `secrets.h`, for example:
+
+- `DEVICE_ID`
+- `MACHINE_ID`
+- `GATEWAY_ID`
+- MQTT topic names
+
+This prevents multiple devices from accidentally using the same identity.
+
+### Git Ignore Rules
+
+The project `.gitignore` must include rules similar to:
+
+```gitignore
+# Local firmware secrets
+**/secrets.h
+**/wifi_credentials.h
+**/local_config.h
+```
+
+### Safety Check Before Commit
+
+Before committing firmware changes, verify that the real secrets file is ignored:
+
+```bash
+git check-ignore -v firmware/common/secrets.h
+```
+
+Expected result:
+
+```text
+.gitignore:...:**/secrets.h    firmware/common/secrets.h
+```
+
+If an ESP32 sketch folder contains a local symbolic link or local copy named `secrets.h`, check it too:
+
+```bash
+git check-ignore -v firmware/esp32_gateway/esp32_gateway_mqtt_test/secrets.h
+```
+
+Also inspect what Git would add before actually staging files:
+
+```bash
+git add -n .
+```
+
+The following files must not appear in the add list:
+
+```text
+firmware/common/secrets.h
+firmware/esp32_gateway/esp32_gateway_mqtt_test/secrets.h
+data/raw/Exp1.csv
+data/raw/Exp2.csv
+data/raw/Prep.csv
+```
+
+### MacBook MQTT Broker IP
+
+For the current prototype, the MQTT broker IP address is configured manually in `secrets.h`.
+
+To find the MacBook Wi-Fi IP address:
+
+```bash
+ipconfig getifaddr en0
+```
+
+Use the returned address as:
+
+```cpp
+#define MQTT_BROKER_IP "YOUR_MACBOOK_IP"
+#define MQTT_BROKER_PORT 1883
+```
+
+This manual IP approach is used for the first hardware prototype because it is simple and reliable during local Wi-Fi or hotspot-based testing.

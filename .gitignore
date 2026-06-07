@@ -37,3 +37,8 @@ id_ed25519*
 # Arduino / build
 build/
 .vscode/
+
+# Local firmware secrets
+**/secrets.h
+**/wifi_credentials.h
+**/local_config.h
