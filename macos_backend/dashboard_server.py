@@ -38,7 +38,7 @@ mqtt_client: Optional[mqtt.Client] = None
 config: Dict[str, str | int] = {
     "broker": "localhost",
     "port": 1883,
-    "topic": "factory/cnc/+/telemetry",
+    "topic": "factory/#",
 }
 
 
@@ -112,6 +112,13 @@ def on_message(client, userdata, msg):
         print(f"Geçersiz MQTT mesajı: {exc}")
         return
 
+    received_at = datetime.now().isoformat(timespec="seconds")
+
+    # Attach MQTT metadata before saving/broadcasting.
+    # Telemetry messages use machine_id; gateway status messages use gateway_id.
+    payload["_topic"] = msg.topic
+    payload["_received_at"] = received_at
+
     insert_message(msg.topic, payload)
     if event_loop is not None:
         asyncio.run_coroutine_threadsafe(broadcast(payload), event_loop)
@@ -176,7 +183,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="CNC IoT Dashboard Server")
     parser.add_argument("--broker", default="localhost", help="MQTT broker adresi")
     parser.add_argument("--mqtt-port", type=int, default=1883, help="MQTT broker portu")
-    parser.add_argument("--topic", default="factory/cnc/+/telemetry", help="Dinlenecek MQTT topic")
+    parser.add_argument("--topic", default="factory/#", help="Dinlenecek MQTT topic")
     parser.add_argument("--host", default="0.0.0.0", help="HTTP dashboard host")
     parser.add_argument("--port", type=int, default=8000, help="HTTP dashboard port")
     args = parser.parse_args()

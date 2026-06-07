@@ -18,7 +18,7 @@
     .hint { color: #64748b; font-size: 12px; margin: 6px 0 10px; }
     .card h2 { margin: 0 0 8px; font-size: 20px; }
     .badge { display: inline-block; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em; }
-    .RUNNING, .GOOD, .NORMAL_LOAD, .LIVE { background: #dcfce7; color: #166534; }
+    .RUNNING, .GOOD, .NORMAL_LOAD, .LIVE, .ONLINE { background: #dcfce7; color: #166534; }
     .WARNING, .HIGH_LOAD { background: #fef9c3; color: #854d0e; }
     .ALARM, .BAD, .FORCE_ALARM { background: #fee2e2; color: #991b1b; }
     .OFFLINE, .NO_DATA { background: #fee2e2; color: #991b1b; }
@@ -40,9 +40,14 @@
   </header>
   <main>
     <div id="connection" class="status-line">WebSocket bağlantısı kuruluyor...</div>
+
+    <h2 class="section-title">Gateway Durumu</h2>
+    <section id="gateways" class="grid"></section>
+
+    <h2 class="section-title">CNC Cihazları</h2>
     <section id="cards" class="grid"></section>
 
-    <h2 class="section-title">Son Gelen Mesajlar</h2>
+    <h2 class="section-title">Son Gelen CNC Mesajları</h2>
     <table>
       <thead>
         <tr>
@@ -64,10 +69,14 @@
 
   <script>
     const DEVICE_OFFLINE_TIMEOUT_MS = 6000;
+    const GATEWAY_OFFLINE_TIMEOUT_MS = 25000;
 
     const machines = new Map();
+    const gateways = new Map();
     const recent = [];
+
     const cardsEl = document.getElementById('cards');
+    const gatewaysEl = document.getElementById('gateways');
     const recentEl = document.getElementById('recent');
     const connectionEl = document.getElementById('connection');
 
@@ -100,6 +109,47 @@
       return `${minutes} dk ${rem} sn`;
     }
 
+    function renderGateways() {
+      gatewaysEl.innerHTML = '';
+      const now = Date.now();
+      const list = [...gateways.values()].sort((a, b) => (a.gateway_id || '').localeCompare(b.gateway_id || ''));
+
+      if (list.length === 0) {
+        const div = document.createElement('div');
+        div.className = 'card offline';
+        div.innerHTML = `
+          <h2>Gateway yok</h2>
+          <div>${badge('OFFLINE')}</div>
+          <div class="hint">Henüz factory/gateway/.../status topic'inden durum mesajı alınmadı.</div>
+        `;
+        gatewaysEl.appendChild(div);
+        return;
+      }
+
+      list.forEach(g => {
+        const lastSeenMs = parseReceivedTime(g);
+        const ageMs = now - lastSeenMs;
+        const timeoutOffline = ageMs > GATEWAY_OFFLINE_TIMEOUT_MS;
+        const reportedStatus = g.status || 'UNKNOWN';
+        const gatewayStatus = timeoutOffline ? 'OFFLINE' : reportedStatus;
+
+        const div = document.createElement('div');
+        div.className = `card ${gatewayStatus === 'OFFLINE' ? 'offline' : ''}`;
+        div.innerHTML = `
+          <h2>${g.gateway_id || 'Gateway'}</h2>
+          <div style="margin-bottom: 8px;">${badge(gatewayStatus)}</div>
+          <div class="hint">Bu kart ESP32 gateway ile MacOS MQTT broker arasındaki bağlantı durumunu gösterir.</div>
+          <div class="metric"><span>MQTT topic</span><span class="mono">${g._topic || '-'}</span></div>
+          <div class="metric"><span>Gateway IP</span><span>${g.ip || '-'}</span></div>
+          <div class="metric"><span>Wi‑Fi kanalı</span><span>${value(g.wifi_channel)}</span></div>
+          <div class="metric"><span>Kayıtlı edge node</span><span>${value(g.edge_node_count)}</span></div>
+          <div class="metric"><span>Son gateway mesajı</span><span>${formatAge(ageMs)} önce</span></div>
+          <div class="metric"><span>Son zaman</span><span>${g._received_at || '-'}</span></div>
+        `;
+        gatewaysEl.appendChild(div);
+      });
+    }
+
     function renderCards() {
       cardsEl.innerHTML = '';
       const now = Date.now();
@@ -112,7 +162,6 @@
         const lastSeenMs = parseReceivedTime(p);
         const ageMs = now - lastSeenMs;
         const isOffline = ageMs > DEVICE_OFFLINE_TIMEOUT_MS;
-        const liveStatus = isOffline ? 'OFFLINE' : 'LIVE';
         const machineStatus = status.machine_status || 'UNKNOWN';
         const dataAlarm = isOffline ? 'NO_DATA_TIMEOUT' : (status.alarm_code || '-');
         const statusBadges = isOffline ? badge('OFFLINE') : `${badge('LIVE')} ${badge(machineStatus)}`;
@@ -122,8 +171,9 @@
         div.innerHTML = `
           <h2>${p.machine_id}</h2>
           <div style="margin-bottom: 8px;">${statusBadges}</div>
-          <div class="hint">${isOffline ? 'Yeni veri gelmiyor. Kartta yalnızca son alınan ölçüm değerleri korunur; makinenin canlı çalışma durumu loglarda kalır.' : 'Canlı veri akışı alınıyor.'}</div>
+          <div class="hint">${isOffline ? 'Yeni CNC verisi gelmiyor. Kartta son alınan ölçüm değerleri korunur.' : 'Canlı CNC veri akışı alınıyor.'}</div>
           <div class="metric"><span>Kaynak</span><span>${p.source_file || '-'}</span></div>
+          <div class="metric"><span>Gateway</span><span>${p.gateway_id || '-'}</span></div>
           <div class="metric"><span>Takım ID</span><span>${value(p.tool_id)}</span></div>
           <div class="metric"><span>Kesme hızı vc</span><span>${value(process.cutting_speed_vc)}</span></div>
           <div class="metric"><span>İlerleme f</span><span>${value(process.feed_rate_f)}</span></div>
@@ -164,9 +214,21 @@
       });
     }
 
+    function isGatewayStatus(payload) {
+      return payload && payload.gateway_id && !payload.machine_id && (payload._topic || '').startsWith('factory/gateway/');
+    }
+
     function ingest(payload) {
-      if (!payload || !payload.machine_id) return;
+      if (!payload) return;
       payload._last_seen_epoch_ms = Date.now();
+
+      if (isGatewayStatus(payload)) {
+        gateways.set(payload.gateway_id, payload);
+        renderGateways();
+        return;
+      }
+
+      if (!payload.machine_id) return;
       machines.set(payload.machine_id, payload);
       recent.unshift(payload);
       if (recent.length > 80) recent.pop();
@@ -175,15 +237,20 @@
     }
 
     async function loadInitial() {
-      const res = await fetch('/api/latest?limit=30');
+      const res = await fetch('/api/latest?limit=80');
       const data = await res.json();
       data.reverse().forEach(p => {
         p._last_seen_epoch_ms = parseReceivedTime(p);
+        if (isGatewayStatus(p)) {
+          gateways.set(p.gateway_id, p);
+          return;
+        }
         if (!p.machine_id) return;
         machines.set(p.machine_id, p);
         recent.unshift(p);
         if (recent.length > 80) recent.pop();
       });
+      renderGateways();
       renderCards();
       renderRecent();
     }
@@ -192,7 +259,7 @@
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/ws`);
       ws.onopen = () => {
-        connectionEl.textContent = `Dashboard WebSocket aktif. Cihaz offline eşiği: ${DEVICE_OFFLINE_TIMEOUT_MS / 1000} sn.`;
+        connectionEl.textContent = `Dashboard WebSocket aktif. CNC offline eşiği: ${DEVICE_OFFLINE_TIMEOUT_MS / 1000} sn, gateway offline eşiği: ${GATEWAY_OFFLINE_TIMEOUT_MS / 1000} sn.`;
         setInterval(() => ws.readyState === WebSocket.OPEN && ws.send('ping'), 15000);
       };
       ws.onmessage = (event) => {
@@ -206,9 +273,10 @@
       };
     }
 
-    // Cihazlardan yeni veri gelmese bile kartlar her saniye yeniden çizilir.
-    // Böylece son veri 6 saniyeyi geçince durum LIVE yerine OFFLINE olur.
-    setInterval(renderCards, 1000);
+    setInterval(() => {
+      renderGateways();
+      renderCards();
+    }, 1000);
 
     loadInitial().then(connectWs).catch(err => {
       connectionEl.textContent = 'Başlangıç verisi alınamadı: ' + err;
