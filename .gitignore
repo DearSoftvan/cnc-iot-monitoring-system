@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+
+# Raw datasets
+data/raw/
+*.csv
+
+# Keep sample CSVs if explicitly added later
+!data/sample/*.csv
+
+# Secrets / credentials
+.env
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.token
+
+# Arduino / build
+build/
+.vscode/
