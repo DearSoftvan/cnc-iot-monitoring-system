@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CNC IoT Yerel Dashboard</title>
+  <style>
+    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17202a; background: #f5f7fb; }
+    body { margin: 0; }
+    header { padding: 22px 28px; background: #111827; color: white; }
+    header h1 { margin: 0 0 6px; font-size: 24px; }
+    header p { margin: 0; opacity: .85; }
+    main { padding: 24px 28px; }
+    .status-line { margin-bottom: 18px; font-size: 14px; color: #4b5563; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
+    .card { background: white; border-radius: 16px; box-shadow: 0 8px 30px rgba(15, 23, 42, .08); padding: 18px; border: 1px solid #e5e7eb; }
+    .card.offline { opacity: .86; border-color: #fecaca; }
+    .hint { color: #64748b; font-size: 12px; margin: 6px 0 10px; }
+    .card h2 { margin: 0 0 8px; font-size: 20px; }
+    .badge { display: inline-block; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em; }
+    .RUNNING, .GOOD, .NORMAL_LOAD, .LIVE { background: #dcfce7; color: #166534; }
+    .WARNING, .HIGH_LOAD { background: #fef9c3; color: #854d0e; }
+    .ALARM, .BAD, .FORCE_ALARM { background: #fee2e2; color: #991b1b; }
+    .OFFLINE, .NO_DATA { background: #fee2e2; color: #991b1b; }
+    .UNKNOWN { background: #e5e7eb; color: #374151; }
+    .metric { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 7px 0; border-bottom: 1px solid #f1f5f9; }
+    .metric span:first-child { color: #64748b; }
+    .metric span:last-child { font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 14px; overflow: hidden; box-shadow: 0 8px 30px rgba(15, 23, 42, .08); }
+    th, td { padding: 11px 12px; border-bottom: 1px solid #eef2f7; font-size: 14px; text-align: left; }
+    th { background: #f8fafc; color: #475569; }
+    .section-title { margin: 26px 0 12px; font-size: 20px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CNC IoT Yerel Dashboard</h1>
+    <p>Wi‑Fi + MQTT veri aktarımı, HTTP/WebSocket canlı dashboard</p>
+  </header>
+  <main>
+    <div id="connection" class="status-line">WebSocket bağlantısı kuruluyor...</div>
+    <section id="cards" class="grid"></section>
+
+    <h2 class="section-title">Son Gelen Mesajlar</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Zaman</th>
+          <th>Makine</th>
+          <th>Takım</th>
+          <th>vc</th>
+          <th>f</th>
+          <th>ap</th>
+          <th>F</th>
+          <th>Ra</th>
+          <th>Durum</th>
+          <th>Alarm</th>
+        </tr>
+      </thead>
+      <tbody id="recent"></tbody>
+    </table>
+  </main>
+
+  <script>
+    const DEVICE_OFFLINE_TIMEOUT_MS = 6000;
+
+    const machines = new Map();
+    const recent = [];
+    const cardsEl = document.getElementById('cards');
+    const recentEl = document.getElementById('recent');
+    const connectionEl = document.getElementById('connection');
+
+    function value(v, suffix = '') {
+      if (v === null || v === undefined || v === '') return '-';
+      if (typeof v === 'number') return Number(v.toFixed(4)).toString() + suffix;
+      return String(v) + suffix;
+    }
+
+    function badge(text) {
+      const cls = text || 'UNKNOWN';
+      return `<span class="badge ${cls}">${text || 'UNKNOWN'}</span>`;
+    }
+
+    function parseReceivedTime(payload) {
+      if (payload._last_seen_epoch_ms) return payload._last_seen_epoch_ms;
+      if (payload._received_at) {
+        const parsed = Date.parse(payload._received_at);
+        if (!Number.isNaN(parsed)) return parsed;
+      }
+      return Date.now();
+    }
+
+    function formatAge(ms) {
+      if (ms < 0) return '0 sn';
+      const seconds = Math.floor(ms / 1000);
+      if (seconds < 60) return `${seconds} sn`;
+      const minutes = Math.floor(seconds / 60);
+      const rem = seconds % 60;
+      return `${minutes} dk ${rem} sn`;
+    }
+
+    function renderCards() {
+      cardsEl.innerHTML = '';
+      const now = Date.now();
+
+      [...machines.values()].sort((a, b) => a.machine_id.localeCompare(b.machine_id)).forEach(p => {
+        const process = p.process || {};
+        const force = p.force || {};
+        const quality = p.quality || {};
+        const status = p.status || {};
+        const lastSeenMs = parseReceivedTime(p);
+        const ageMs = now - lastSeenMs;
+        const isOffline = ageMs > DEVICE_OFFLINE_TIMEOUT_MS;
+        const liveStatus = isOffline ? 'OFFLINE' : 'LIVE';
+        const machineStatus = status.machine_status || 'UNKNOWN';
+        const dataAlarm = isOffline ? 'NO_DATA_TIMEOUT' : (status.alarm_code || '-');
+        const statusBadges = isOffline ? badge('OFFLINE') : `${badge('LIVE')} ${badge(machineStatus)}`;
+
+        const div = document.createElement('div');
+        div.className = `card ${isOffline ? 'offline' : ''}`;
+        div.innerHTML = `
+          <h2>${p.machine_id}</h2>
+          <div style="margin-bottom: 8px;">${statusBadges}</div>
+          <div class="hint">${isOffline ? 'Yeni veri gelmiyor. Kartta yalnızca son alınan ölçüm değerleri korunur; makinenin canlı çalışma durumu loglarda kalır.' : 'Canlı veri akışı alınıyor.'}</div>
+          <div class="metric"><span>Kaynak</span><span>${p.source_file || '-'}</span></div>
+          <div class="metric"><span>Takım ID</span><span>${value(p.tool_id)}</span></div>
+          <div class="metric"><span>Kesme hızı vc</span><span>${value(process.cutting_speed_vc)}</span></div>
+          <div class="metric"><span>İlerleme f</span><span>${value(process.feed_rate_f)}</span></div>
+          <div class="metric"><span>Kesme derinliği ap</span><span>${value(process.depth_of_cut_ap)}</span></div>
+          <div class="metric"><span>Toplam kuvvet F</span><span>${value(force.total_force)}</span></div>
+          <div class="metric"><span>Ra yüzey kalitesi</span><span>${value(quality.ra)}</span></div>
+          <div class="metric"><span>Son bilinen yük durumu</span><span>${badge(status.load_status)}</span></div>
+          <div class="metric"><span>Son bilinen kalite durumu</span><span>${badge(status.quality_status)}</span></div>
+          <div class="metric"><span>Bağlantı alarmı</span><span class="mono">${dataAlarm}</span></div>
+          <div class="metric"><span>Son cihaz verisi</span><span>${formatAge(ageMs)} önce</span></div>
+          <div class="metric"><span>Son zaman</span><span>${p.timestamp || p._received_at || '-'}</span></div>
+        `;
+        cardsEl.appendChild(div);
+      });
+    }
+
+    function renderRecent() {
+      recentEl.innerHTML = '';
+      recent.slice(0, 30).forEach(p => {
+        const process = p.process || {};
+        const force = p.force || {};
+        const quality = p.quality || {};
+        const status = p.status || {};
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${p.timestamp || p._received_at || '-'}</td>
+          <td>${p.machine_id || '-'}</td>
+          <td>${value(p.tool_id)}</td>
+          <td>${value(process.cutting_speed_vc)}</td>
+          <td>${value(process.feed_rate_f)}</td>
+          <td>${value(process.depth_of_cut_ap)}</td>
+          <td>${value(force.total_force)}</td>
+          <td>${value(quality.ra)}</td>
+          <td>${badge(status.machine_status)}</td>
+          <td class="mono">${status.alarm_code || '-'}</td>
+        `;
+        recentEl.appendChild(row);
+      });
+    }
+
+    function ingest(payload) {
+      if (!payload || !payload.machine_id) return;
+      payload._last_seen_epoch_ms = Date.now();
+      machines.set(payload.machine_id, payload);
+      recent.unshift(payload);
+      if (recent.length > 80) recent.pop();
+      renderCards();
+      renderRecent();
+    }
+
+    async function loadInitial() {
+      const res = await fetch('/api/latest?limit=30');
+      const data = await res.json();
+      data.reverse().forEach(p => {
+        p._last_seen_epoch_ms = parseReceivedTime(p);
+        if (!p.machine_id) return;
+        machines.set(p.machine_id, p);
+        recent.unshift(p);
+        if (recent.length > 80) recent.pop();
+      });
+      renderCards();
+      renderRecent();
+    }
+
+    function connectWs() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onopen = () => {
+        connectionEl.textContent = `Dashboard WebSocket aktif. Cihaz offline eşiği: ${DEVICE_OFFLINE_TIMEOUT_MS / 1000} sn.`;
+        setInterval(() => ws.readyState === WebSocket.OPEN && ws.send('ping'), 15000);
+      };
+      ws.onmessage = (event) => {
+        const payload = JSON.parse(event.data);
+        if (payload.type === 'connected') return;
+        ingest(payload);
+      };
+      ws.onclose = () => {
+        connectionEl.textContent = 'WebSocket bağlantısı koptu. 3 saniye içinde tekrar denenecek...';
+        setTimeout(connectWs, 3000);
+      };
+    }
+
+    // Cihazlardan yeni veri gelmese bile kartlar her saniye yeniden çizilir.
+    // Böylece son veri 6 saniyeyi geçince durum LIVE yerine OFFLINE olur.
+    setInterval(renderCards, 1000);
+
+    loadInitial().then(connectWs).catch(err => {
+      connectionEl.textContent = 'Başlangıç verisi alınamadı: ' + err;
+      connectWs();
+    });
+  </script>
+</body>
+</html>
